@@ -89,11 +89,10 @@ func (n *Node) Serve(ctx context.Context) error {
 		return err
 	}
 
-	go n.waitClose(ctx, l)
-
-	go n.waitRequest(l)
-
 	n.server = rpc.NewServer()
+
+	go n.waitClose(ctx, l)
+	go n.waitRequest(l)
 
 	return n.server.RegisterName("dlm", n)
 }

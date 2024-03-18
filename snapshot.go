@@ -2,6 +2,7 @@ package dlm
 
 import (
 	"encoding/json"
+	"log/slog"
 
 	"github.com/hashicorp/raft"
 )
@@ -28,7 +29,9 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 	}()
 
 	if err != nil {
-		sink.Cancel()
+		if e := sink.Cancel(); e != nil {
+			Logger.Warn("cancel snapshot sink", slog.String("err", e.Error()))
+		}
 	}
 
 	return err
