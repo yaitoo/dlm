@@ -24,9 +24,3 @@ func WithLogger(w io.Writer) NodeOption {
 		n.logger = w
 	}
 }
-
-func WithSettings(s Settings) NodeOption {
-	return func(n *Node) {
-		n.settings = s
-	}
-}
