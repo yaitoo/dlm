@@ -47,8 +47,3 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	go c.wait()
 	return c.Conn.Write(p)
 }
-
-func (c *Conn) Close() error {
-	go c.wait()
-	return c.Conn.Close()
-}

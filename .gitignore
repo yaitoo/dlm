@@ -15,7 +15,8 @@ snapshots
 
 # Output of the go coverage tool, specifically when used with LiteIDE
 *.out
-
+coverage.txt
+__debug_bin*
 
 # Dependency directories (remove the comment below to include it)
 # vendor/

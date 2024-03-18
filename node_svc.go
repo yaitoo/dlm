@@ -114,7 +114,6 @@ func (n *Node) waitRequest(l net.Listener) {
 }
 
 func (n *Node) waitClose(ctx context.Context, l net.Listener) {
-	defer l.Close()
-
 	<-ctx.Done()
+	l.Close()
 }

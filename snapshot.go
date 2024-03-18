@@ -37,4 +37,4 @@ func (s *snapshot) Persist(sink raft.SnapshotSink) error {
 	return err
 }
 
-func (s *snapshot) Release() {}
+func (_ *snapshot) Release() {}

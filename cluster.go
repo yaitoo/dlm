@@ -91,7 +91,7 @@ func (c *Cluster) Join(ctx context.Context, p Peer) error {
 
 	_, err := a.WaitAny(ctx)
 
-	if err != nil && !exists {
+	if err == nil && !exists {
 		c.peers = append(c.peers, p)
 	}
 
