@@ -39,8 +39,6 @@ type Node struct {
 	dir    string
 	logger io.Writer
 
-	settings Settings
-
 	addr   string
 	server *rpc.Server
 
