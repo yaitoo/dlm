@@ -1,6 +1,10 @@
 package dlm
 
-import "time"
+import (
+	"time"
+
+	"github.com/yaitoo/sqle"
+)
 
 // Lease lock period on the key
 type Lease struct {
@@ -9,13 +13,12 @@ type Lease struct {
 
 	Lessee string
 	Since  int64
-	TTL    time.Duration
-	Nonce  uint64
+	TTL    sqle.Duration
 
 	// Only available on mutex
 	ExpiresOn time.Time `json:"-"`
 }
 
 func (l *Lease) IsLive() bool {
-	return time.Now().Before(time.Unix(l.Since, 0).Add(l.TTL))
+	return time.Now().Before(time.Unix(l.Since, 0).Add(l.TTL.Duration()))
 }

@@ -2,41 +2,65 @@ package dlm
 
 import (
 	"context"
+	"database/sql"
+	"net"
+	"os"
+	"strconv"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/require"
+	"github.com/yaitoo/sqle"
 )
 
-func TestNode(t *testing.T) {
+func getFreeAddr() string {
+	l, err := net.Listen("tcp", ":0")
+
+	if err != nil {
+		return ""
+	}
+
+	defer l.Close()
+	return "127.0.0.1:" + strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
+}
+
+func createSqlite3() (*sql.DB, func(), error) {
+	f, err := os.CreateTemp(".", "*.db")
+	f.Close()
+
+	clean := func() {
+		os.Remove(f.Name()) //nolint
+	}
+
+	if err != nil {
+		return nil, clean, err
+	}
+
+	db, err := sql.Open("sqlite3", f.Name())
+
+	if err != nil {
+		return nil, clean, err
+	}
+
+	return db, clean, nil
+
+}
+
+func TestLease(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	n := NewNode(getFreeAddr(), WithRaft("1", getFreeAddr()))
-	err := n.Start(ctx)
+
+	db, clean, err := createSqlite3()
+	require.NoError(t, err)
+	defer clean()
+
+	n := NewNode(getFreeAddr(), sqle.Open(db))
+	err = n.Start(ctx)
 	require.NoError(t, err)
 
-	// err = n.Serve(ctx)
-	// require.NoError(t, err)
-
-	// n2 := NewNode(getFreeAddr(), WithRaft("2", getFreeAddr()))
-	// err = n2.Start(ctx)
-	// require.NoError(t, err)
-
-	// err = n2.Serve(ctx)
-	// require.NoError(t, err)
-
-	walletTerms := 5 * time.Second
-	userTerms := 3 * time.Second
-
-	c := &Cluster{}
-	err = c.Start(n, WithLeaseTerms(map[string]time.Duration{
-		"wallet": walletTerms,
-		"user":   userTerms,
-	}))
-	require.NoError(t, err)
-
-	// err = c.Join(ctx, Peer{Addr: n2.addr, RaftID: n2.raftID, RaftAddr: n2.raftAddr})
-	// require.NoError(t, err)
+	walletTerms := sqle.Duration(5 * time.Second)
+	userTerms := sqle.Duration(3 * time.Second)
 
 	tests := []struct {
 		name string
@@ -46,15 +70,18 @@ func TestNode(t *testing.T) {
 			name: "new_lock_should_work",
 			run: func(re *require.Assertions) {
 				var expected Lease
-				err := n.NewLock(LockRequest{
+				req := LockRequest{
 					ID:    "new_lock",
 					Topic: "wallet",
 					Key:   "new_lock",
-				}, &expected)
+					TTL:   walletTerms.Duration(),
+				}
+
+				err := n.NewLock(req, &expected)
 
 				re.NoError(err)
 
-				actual, err := n.getLease("wallet:new_lock")
+				actual, err := n.getLease("wallet", "new_lock")
 				re.NoError(err)
 				re.Equal(expected, actual)
 				re.Equal(walletTerms, actual.TTL)
@@ -68,20 +95,21 @@ func TestNode(t *testing.T) {
 					Key:   "new_lock",
 				}, &expected)
 
-				re.ErrorIs(err, ErrAlreadyLocked)
+				re.ErrorIs(err, ErrLeaseExists)
 
 				err = n.NewLock(LockRequest{
 					ID:    "new_lock_3",
 					Topic: "no_exists_topic",
 					Key:   "new_lock",
+					TTL:   DefaultLeaseTerm,
 				}, &expected)
 
 				re.NoError(err)
 
-				actual, err = n.getLease("no_exists_topic:new_lock")
+				actual, err = n.getLease("no_exists_topic", "new_lock")
 				re.NoError(err)
 
-				re.Equal(DefaultLeaseTerm, actual.TTL)
+				re.Equal(DefaultLeaseTerm, actual.TTL.Duration())
 				re.Equal("new_lock_3", actual.Lessee)
 				re.Equal("no_exists_topic", actual.Topic)
 				re.Equal("new_lock", actual.Key)
@@ -95,11 +123,12 @@ func TestNode(t *testing.T) {
 					ID:    "renew_lock",
 					Topic: "user",
 					Key:   "renew_lock",
+					TTL:   userTerms.Duration(),
 				}, &expected)
 
 				re.NoError(err)
 
-				actual, err := n.getLease("user:renew_lock")
+				actual, err := n.getLease("user", "renew_lock")
 				re.NoError(err)
 				re.Equal(expected, actual)
 				re.Equal(userTerms, actual.TTL)
@@ -111,6 +140,7 @@ func TestNode(t *testing.T) {
 					ID:    "renew_lock_3",
 					Topic: "user",
 					Key:   "renew_lock",
+					TTL:   userTerms.Duration(),
 				}, &expected)
 
 				re.ErrorIs(err, ErrNotYourLease)
@@ -119,11 +149,12 @@ func TestNode(t *testing.T) {
 					ID:    "renew_lock",
 					Topic: "user",
 					Key:   "renew_lock",
+					TTL:   userTerms.Duration(),
 				}, &expected)
 
 				re.NoError(err)
 
-				actual, err = n.getLease("user:renew_lock")
+				actual, err = n.getLease("user", "renew_lock")
 				re.NoError(err)
 				re.Equal(expected, actual)
 				re.Equal(userTerms, actual.TTL)
@@ -139,7 +170,7 @@ func TestNode(t *testing.T) {
 
 				re.ErrorIs(err, ErrNoLease)
 
-				time.Sleep(userTerms)
+				time.Sleep(userTerms.Duration())
 				err = n.RenewLock(LockRequest{
 					ID:    "renew_lock",
 					Topic: "user",
@@ -158,11 +189,12 @@ func TestNode(t *testing.T) {
 					ID:    "release_lock",
 					Topic: "wallet",
 					Key:   "release_lock",
+					TTL:   walletTerms.Duration(),
 				}, &expected)
 
 				re.NoError(err)
 
-				actual, err := n.getLease("wallet:release_lock")
+				actual, err := n.getLease("wallet", "release_lock")
 				re.NoError(err)
 				re.Equal(expected, actual)
 				re.Equal(walletTerms, actual.TTL)
@@ -186,41 +218,8 @@ func TestNode(t *testing.T) {
 
 				re.NoError(err)
 
-				actual, err = n.getLease("wallet:release_lock")
+				actual, err = n.getLease("wallet", "release_lock")
 				re.ErrorIs(err, ErrNoLease)
-
-			},
-		},
-		{
-			name: "terms_should_work",
-			run: func(re *require.Assertions) {
-				orderTerms := 4 * time.Second
-				var ok bool
-
-				actual, err := n.getTerms("order")
-				re.NoError(err)
-				re.Equal(DefaultLeaseTerm, actual)
-
-				err = n.SetTerms(TermsRequest{
-					Topic: "order",
-					TTL:   orderTerms,
-				}, &ok)
-
-				re.NoError(err)
-
-				actual, err = n.getTerms("order")
-				re.NoError(err)
-				re.Equal(orderTerms, actual)
-
-				err = n.RemoveTerms(TermsRequest{
-					Topic: "order",
-				}, &ok)
-
-				re.NoError(err)
-
-				actual, err = n.getTerms("order")
-				re.NoError(err)
-				re.Equal(DefaultLeaseTerm, actual)
 
 			},
 		},
@@ -233,129 +232,146 @@ func TestNode(t *testing.T) {
 	}
 }
 
-func TestLeader(t *testing.T) {
+func TestTopic(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	n1 := NewNode(getFreeAddr(), WithRaft("1", getFreeAddr()))
-	err := n1.Start(ctx)
+
+	db, clean, err := createSqlite3()
+	require.NoError(t, err)
+	defer clean()
+
+	n := NewNode(getFreeAddr(), sqle.Open(db))
+	err = n.Start(ctx)
 	require.NoError(t, err)
 
-	err = n1.Serve(ctx)
-	require.NoError(t, err)
-
-	n2 := NewNode(getFreeAddr(), WithRaft("2", getFreeAddr()))
-	err = n2.Start(ctx)
-	require.NoError(t, err)
-
-	err = n2.Serve(ctx)
-	require.NoError(t, err)
-
-	c := &Cluster{}
-	err = c.Start(n1)
-	require.NoError(t, err)
-
-	err = c.Join(ctx, Peer{Addr: n2.addr, RaftID: n2.raftID, RaftAddr: n2.raftAddr})
-	require.NoError(t, err)
-
-	nodes := map[string]*Node{
-		"1": n1,
-		"2": n2,
-	}
+	terms := sqle.Duration(5 * time.Second)
 
 	tests := []struct {
 		name string
 		run  func(*require.Assertions)
 	}{
 		{
-			name: "leader_should_work",
+			name: "freeze_should_work",
 			run: func(re *require.Assertions) {
 				var expected Lease
 
-				_, id := n1.raft.LeaderWithID()
-				n := nodes[string(id)]
-
 				err := n.NewLock(LockRequest{
-					ID:    "leader",
-					Topic: "wallet",
-					Key:   "leader",
+					ID:    "freeze",
+					Topic: "freeze",
+					Key:   "freeze",
+					TTL:   terms.Duration(),
 				}, &expected)
 
+				re.NoError(err)
+
+				actual, err := n.getLease("freeze", "freeze")
+				re.NoError(err)
+				re.Equal(expected, actual)
+				re.Equal(terms, actual.TTL)
+				re.Equal("freeze", actual.Lessee)
+				re.Equal("freeze", actual.Topic)
+				re.Equal("freeze", actual.Key)
+
+				var ok bool
+				err = n.Freeze("freeze", &ok)
 				re.NoError(err)
 
 				err = n.RenewLock(LockRequest{
-					ID:    "leader",
-					Topic: "wallet",
-					Key:   "leader",
+					ID:    "freeze",
+					Topic: "freeze",
+					Key:   "freeze",
 				}, &expected)
-				re.NoError(err)
-				var ok bool
-				err = n.ReleaseLock(LockRequest{
-					ID:    "leader",
-					Topic: "wallet",
-					Key:   "leader",
-				}, &ok)
-				re.NoError(err)
+				re.ErrorIs(err, ErrFrozenTopic)
 
-				err = n.SetTerms(TermsRequest{
-					Topic: "leader",
-					TTL:   DefaultLeaseTerm,
-				}, &ok)
+				err = n.NewLock(LockRequest{
+					ID:    "freeze",
+					Topic: "freeze",
+					Key:   "freeze_2",
+				}, &expected)
 
+				re.ErrorIs(err, ErrFrozenTopic)
+
+				err = n.Reset("freeze", &ok)
 				re.NoError(err)
 
-				err = n.RemoveTerms(TermsRequest{
-					Topic: "leader",
-				}, &ok)
+				err = n.NewLock(LockRequest{
+					ID:    "freeze",
+					Topic: "freeze",
+					Key:   "freeze_3",
+					TTL:   terms.Duration(),
+				}, &expected)
 
 				re.NoError(err)
+
+				actual, err = n.getLease("freeze", "freeze_3")
+				re.NoError(err)
+
+				re.Equal(terms, actual.TTL)
+				re.Equal("freeze", actual.Lessee)
+				re.Equal("freeze", actual.Topic)
+				re.Equal("freeze_3", actual.Key)
 			},
 		},
 		{
-			name: "not_leader_should_not_work",
+			name: "reset_should_work",
 			run: func(re *require.Assertions) {
 				var expected Lease
 
-				_, id := n1.raft.LeaderWithID()
-				var n *Node
-				if id == "1" {
-					n = n2
-				} else {
-					n = n1
-				}
+				var ok bool
+				err = n.Freeze("reset", &ok)
+				re.NoError(err)
 
-				err := n.NewLock(LockRequest{
-					ID:    "follower",
-					Topic: "wallet",
-					Key:   "follower",
+				err = n.NewLock(LockRequest{
+					ID:    "reset",
+					Topic: "reset",
+					Key:   "reset",
 				}, &expected)
 
-				re.ErrorIs(err, ErrNotRaftLeader)
+				re.ErrorIs(err, ErrFrozenTopic)
 
 				err = n.RenewLock(LockRequest{
-					ID:    "follower",
-					Topic: "wallet",
-					Key:   "follower",
+					ID:    "reset",
+					Topic: "reset",
+					Key:   "reset",
 				}, &expected)
-				re.ErrorIs(err, ErrNotRaftLeader)
+				re.ErrorIs(err, ErrFrozenTopic)
 
-				var ok bool
-				err = n.ReleaseLock(LockRequest{
-					ID:    "follower",
-					Topic: "wallet",
-					Key:   "follower",
-				}, &ok)
-				re.ErrorIs(err, ErrNotRaftLeader)
+				err = n.Reset("reset", &ok)
+				re.NoError(err)
 
-				err = n.SetTerms(TermsRequest{
-					Topic: "follower",
-					TTL:   DefaultLeaseTerm,
-				}, &ok)
-				re.ErrorIs(err, ErrNotRaftLeader)
+				err = n.NewLock(LockRequest{
+					ID:    "reset",
+					Topic: "reset",
+					Key:   "reset",
+					TTL:   terms.Duration(),
+				}, &expected)
 
-				err = n.RemoveTerms(TermsRequest{
-					Topic: "follower",
-				}, &ok)
-				re.ErrorIs(err, ErrNotRaftLeader)
+				re.NoError(err)
+
+				actual, err := n.getLease("reset", "reset")
+				re.NoError(err)
+
+				re.Equal(terms, actual.TTL)
+				re.Equal("reset", actual.Lessee)
+				re.Equal("reset", actual.Topic)
+				re.Equal("reset", actual.Key)
+
+				err = n.RenewLock(LockRequest{
+					ID:    "reset",
+					Topic: "reset",
+					Key:   "reset",
+					TTL:   10 * time.Second,
+				}, &expected)
+
+				re.NoError(err)
+
+				actual, err = n.getLease("reset", "reset")
+				re.NoError(err)
+
+				re.Equal(10*time.Second, actual.TTL.Duration())
+				re.Equal("reset", actual.Lessee)
+				re.Equal("reset", actual.Topic)
+				re.Equal("reset", actual.Key)
 
 			},
 		},
