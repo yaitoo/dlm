@@ -543,7 +543,7 @@ func TestTopic(t *testing.T) {
 		},
 
 		{
-			name: "freeze_should_work_when_minority_nodes_are_down",
+			name: "freeze_should_not_work_when_majority_nodes_are_down",
 			run: func(r *require.Assertions) {
 				ttl := 10 * time.Second
 				m := New("freeze", "freeze", "freeze", WithPeers(peers...), WithTTL(ttl))
