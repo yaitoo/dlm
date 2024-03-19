@@ -249,6 +249,35 @@ func TestRenew(t *testing.T) {
 			},
 		},
 		{
+			name: "renew_should_not_work_when_the_lease_does_not_exists",
+			run: func(r *require.Assertions) {
+				ttl := 2 * time.Second
+				m := New("renew", "wallet", "renew_does_not_exists", WithPeers(peers...), WithTTL(ttl))
+
+				err = m.Renew(context.TODO())
+				r.Error(err, ErrNoLease)
+			},
+		},
+		{
+			name: "renew_should_not_work_when_lease_is_not_yours",
+			run: func(r *require.Assertions) {
+				ttl := 5 * time.Second
+				m := New("renew", "wallet", "renew_not_yours", WithPeers(peers...), WithTTL(ttl))
+
+				err := m.Lock(context.Background())
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("renew", m.lease.Lessee)
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("renew_not_yours", m.lease.Key)
+
+				m2 := New("renew_2", "wallet", "renew_not_yours", WithPeers(peers...), WithTTL(ttl))
+				err = m2.Renew(context.Background())
+				r.ErrorIs(err, ErrNotYourLease)
+
+			},
+		},
+		{
 			name: "renew_should_work_when_minority_nodes_are_down",
 			run: func(r *require.Assertions) {
 				m := New("renew", "wallet", "renew_minority", WithPeers(peers...), WithTTL(10*time.Second))
@@ -283,6 +312,115 @@ func TestRenew(t *testing.T) {
 				nodes[1].Stop()
 				nodes[2].Stop()
 				err = m.Renew(context.TODO())
+				r.ErrorIs(err, async.ErrTooLessDone)
+
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.run(require.New(t))
+		})
+	}
+}
+
+func TestUnlock(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	peers, nodes, clean, err := createCluster(ctx, 5)
+
+	require.NoError(t, err)
+
+	defer func() {
+		for _, c := range clean {
+			c()
+		}
+	}()
+
+	tests := []struct {
+		name string
+		run  func(*require.Assertions)
+	}{
+		{
+			name: "unlock_should_work",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("unlock", "wallet", "unlock", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("unlock", m.lease.Key)
+
+				err = m.Unlock(context.TODO())
+				r.NoError(err)
+
+				err = m.Renew(context.TODO())
+				r.ErrorIs(err, ErrNoLease)
+			},
+		},
+		{
+			name: "unlock_should_not_work_when_lease_is_not_yours",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("unlock", "wallet", "unlock_not_yours", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("unlock", m.lease.Lessee)
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("unlock_not_yours", m.lease.Key)
+
+				m2 := New("unlock_2", "wallet", "unlock_not_yours", WithPeers(peers...), WithTTL(ttl))
+				err = m2.Unlock(context.TODO())
+
+				r.ErrorIs(err, ErrNotYourLease)
+			},
+		},
+
+		{
+			name: "unlock_should_work_when_minority_nodes_are_down",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("unlock", "wallet", "unlock_minority", WithPeers(peers...), WithTTL(ttl))
+
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("unlock", m.lease.Lessee)
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("unlock_minority", m.lease.Key)
+
+				nodes[0].Stop()
+				nodes[1].Stop()
+				err = m.Unlock(context.TODO())
+				r.NoError(err)
+
+			},
+		},
+		{
+			name: "renew_should_not_work_when_majority_nodes_are_down",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("unlock", "wallet", "unlock_majority", WithPeers(peers...), WithTTL(ttl))
+
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("unlock", m.lease.Lessee)
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("unlock_majority", m.lease.Key)
+
+				nodes[0].Stop()
+				nodes[1].Stop()
+				nodes[2].Stop()
+
+				err = m.Unlock(context.TODO())
 				r.ErrorIs(err, async.ErrTooLessDone)
 
 			},
