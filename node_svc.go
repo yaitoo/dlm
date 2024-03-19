@@ -8,7 +8,7 @@ import (
 	"net/rpc"
 )
 
-// Serve start the node's RPC service
+// Start start the node and its RPC service
 func (n *Node) Start(ctx context.Context) error {
 	l, err := net.Listen("tcp", n.addr)
 	if err != nil {
@@ -32,6 +32,7 @@ func (n *Node) Start(ctx context.Context) error {
 	return n.server.RegisterName("dlm", n)
 }
 
+// Stop stop the node and its RPC service
 func (n *Node) Stop() {
 	n.close <- struct{}{}
 	n.logger.Info("dlm: node stopped")

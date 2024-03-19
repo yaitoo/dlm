@@ -20,7 +20,7 @@ func (n *Node) NewLock(req LockRequest, t *Lease) error {
 	lease, err := n.getLease(req.Topic, req.Key)
 
 	if err == nil { // exits a lease
-		if lease.Lessee != req.ID && lease.IsLive() { //someone else's lease is still live
+		if lease.Lessee != req.ID && lease.IsLive() { // someone else's lease is still live
 			return ErrLeaseExists
 		}
 	} else {
