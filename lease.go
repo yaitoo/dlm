@@ -24,6 +24,7 @@ func (l *Lease) IsLive() bool {
 	return time.Now().Before(time.Unix(l.Since, 0).Add(l.TTL.Duration()))
 }
 
+// IsExpired check if lease expires on mutex side
 func (l *Lease) IsExpired(start time.Time) bool {
 	now := time.Now()
 	l.ExpiresOn = now.Add(l.TTL.Duration() - time.Until(start))

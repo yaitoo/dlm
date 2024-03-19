@@ -19,7 +19,6 @@ func New(id, topic, key string, options ...MutexOption) *Mutex {
 		id:      id,
 		topic:   strings.ToLower(topic),
 		key:     strings.ToLower(key),
-		done:    make(chan struct{}),
 		timeout: DefaultTimeout,
 		ttl:     DefaultLeaseTerm,
 	}
@@ -28,6 +27,7 @@ func New(id, topic, key string, options ...MutexOption) *Mutex {
 		o(m)
 	}
 
+	m.Context, m.cancel = context.WithCancelCause(context.Background())
 	m.consensus = int(math.Floor(float64(len(m.peers))/2)) + 1
 
 	return m
@@ -44,7 +44,9 @@ type Mutex struct {
 	ttl     time.Duration
 
 	consensus int
-	done      chan struct{}
+
+	context.Context
+	cancel context.CancelCauseFunc
 
 	lease Lease
 }
@@ -69,7 +71,7 @@ func (m *Mutex) connect(ctx context.Context) ([]*rpc.Client, error) {
 
 }
 
-func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, error) {
+func (m *Mutex) Lock(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -81,7 +83,7 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, 
 
 	cluster, err := m.connect(ctx)
 	if err != nil {
-		return nil, nil, err
+		return err
 	}
 
 	for _, c := range cluster {
@@ -99,23 +101,20 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, 
 
 	if err != nil {
 		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
-		return nil, nil, m.Error(errs, err)
+		return m.Error(errs, err)
 	}
 
 	t := result[0]
 
 	if t.IsExpired(start) {
-		return nil, nil, ErrExpiredLease
+		return ErrExpiredLease
 	}
 
 	m.lease = t
 
-	statusCtx, statusCancel := context.WithCancel(context.Background())
+	go m.waitExpires()
 
-	go m.keepalive(statusCtx, statusCancel)
-	go m.waitExpires(statusCtx, statusCancel)
-
-	return statusCtx, statusCancel, nil
+	return nil
 
 }
 
@@ -186,13 +185,14 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 			}
 		}(c))
 	}
-	m.done <- struct{}{}
 
 	_, errs, err := a.WaitN(ctx, m.consensus)
 	if err != nil {
 		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
 		return m.Error(errs, err)
 	}
+
+	m.cancel(nil)
 
 	return nil
 }
@@ -205,8 +205,8 @@ func (m *Mutex) createRequest() LockRequest {
 	}
 }
 
-func (m *Mutex) waitExpires(ctx context.Context, cancel context.CancelFunc) {
-	defer cancel()
+func (m *Mutex) waitExpires() {
+
 	var expiresOn time.Time
 	for {
 		m.mu.RLock()
@@ -214,41 +214,44 @@ func (m *Mutex) waitExpires(ctx context.Context, cancel context.CancelFunc) {
 		m.mu.RUnlock()
 
 		select {
-		case <-m.done:
-			return
-		case <-ctx.Done():
+
+		case <-m.Context.Done():
 			return
 		case <-time.After(time.Until(expiresOn)):
-			if !expiresOn.Before(expiresOn) {
+			// get latest ExpiresOn
+			m.mu.RLock()
+			expiresOn = m.lease.ExpiresOn
+			m.mu.RUnlock()
+
+			if !time.Now().Before(expiresOn) {
+				m.cancel(ErrExpiredLease)
 				return
 			}
 		}
 	}
 }
 
-func (m *Mutex) keepalive(ctx context.Context, cancel context.CancelFunc) {
-	defer cancel()
+func (m *Mutex) Keepalive() {
 
 	var err error
 	for {
-
-		m.mu.RLock()
-		expiresOn := m.lease.ExpiresOn
-		m.mu.RUnlock()
-
 		select {
-		case <-m.done:
-			return
-		case <-ctx.Done():
+		case <-m.Context.Done():
 			return
 		case <-time.After(1 * time.Second):
+			m.mu.RLock()
+			expiresOn := m.lease.ExpiresOn
+			m.mu.RUnlock()
+
 			// lease already expires
-			if !expiresOn.Before(expiresOn) {
+			if !time.Now().Before(expiresOn) {
+				m.cancel(ErrExpiredLease)
 				return
 			}
 
 			err = m.Renew(context.Background())
 			if errors.Is(err, ErrExpiredLease) {
+				m.cancel(ErrExpiredLease)
 				return
 			}
 		}

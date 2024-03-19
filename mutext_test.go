@@ -54,17 +54,74 @@ func TestLock(t *testing.T) {
 			name: "lock_should_work",
 			run: func(r *require.Assertions) {
 				m := New("lock_should_work", "wallet", "lock_should_work", WithPeers(peers...), WithTTL(10*time.Second))
-				_, cancel, err := m.Lock(context.TODO())
-				defer cancel()
+				err := m.Lock(context.TODO())
 				r.NoError(err)
 				r.Equal(10*time.Second, m.lease.TTL.Duration())
 				r.Equal("wallet", m.lease.Topic)
 				r.Equal("lock_should_work", m.lease.Key)
 
-				m2 := New("lock_should_work_2", "wallet", "lock_should_work", WithPeers(peers...))
-				_, _, err = m2.Lock(context.TODO())
+			},
+		},
+		{
+			name: "lock_should_not_work_if_lease_exists",
+			run: func(r *require.Assertions) {
+				m := New("lock", "wallet", "lock_exists", WithPeers(peers...), WithTTL(10*time.Second))
+				err := m.Lock(context.TODO())
+				r.NoError(err)
+				r.Equal(10*time.Second, m.lease.TTL.Duration())
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("lock_exists", m.lease.Key)
 
-				r.Error(err, async.ErrTooLessDone)
+				m2 := New("lock_2", "wallet", "lock_exists", WithPeers(peers...))
+				err = m2.Lock(context.TODO())
+
+				r.Error(err, ErrLeaseExists)
+			},
+		},
+		{
+			name: "expires_should_work",
+			run: func(r *require.Assertions) {
+				ttl := 3 * time.Second
+				m := New("lock_should_work", "wallet", "expires_should_work", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("expires_should_work", m.lease.Key)
+
+				time.Sleep(ttl)
+
+				<-m.Done()
+				r.ErrorIs(context.Cause(m), ErrExpiredLease)
+
+			},
+		},
+		{
+			name: "lock_should_work_when_old_lease_expires",
+			run: func(r *require.Assertions) {
+				ttl := 3 * time.Second
+				m := New("lock", "wallet", "lock_exists", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("lock", m.lease.Lessee)
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("lock_exists", m.lease.Key)
+
+				ttl2 := 5 * time.Second
+				m2 := New("lock_2", "wallet", "lock_exists", WithPeers(peers...), WithTTL(ttl2))
+				err = m2.Lock(context.TODO())
+
+				r.Error(err, ErrLeaseExists)
+
+				time.Sleep(ttl) // wait for 1st lease expires
+
+				err = m2.Lock(context.TODO())
+				r.NoError(err)
+				r.Equal(ttl2, m2.lease.TTL.Duration())
+				r.Equal("lock_2", m2.lease.Lessee)
+				r.Equal("wallet", m2.lease.Topic)
+				r.Equal("lock_exists", m2.lease.Key)
 			},
 		},
 		{
@@ -75,18 +132,17 @@ func TestLock(t *testing.T) {
 				nodes[0].Stop()
 				nodes[1].Stop()
 
-				_, cancel, err := m.Lock(context.TODO())
-				defer cancel()
+				err := m.Lock(context.TODO())
+
 				r.NoError(err)
 				r.Equal(10*time.Second, m.lease.TTL.Duration())
 				r.Equal("wallet", m.lease.Topic)
 				r.Equal("minority_nodes_are_down", m.lease.Key)
 
 				m2 := New("lock_should_work_2", "wallet", "minority_nodes_are_down", WithPeers(peers...))
-				_, _, err = m2.Lock(context.TODO())
+				err = m2.Lock(context.TODO())
 
 				r.Error(err, async.ErrTooLessDone)
-
 			},
 		},
 		{
@@ -96,13 +152,8 @@ func TestLock(t *testing.T) {
 
 				nodes[2].Stop()
 
-				_, cancel, err := m.Lock(context.TODO())
-				if cancel != nil {
-					defer cancel()
-				}
-
+				err = m.Lock(context.TODO())
 				r.Error(err, async.ErrTooLessDone)
-
 			},
 		},
 	}
@@ -136,8 +187,8 @@ func TestRenew(t *testing.T) {
 			run: func(r *require.Assertions) {
 				ttl := 10 * time.Second
 				m := New("renew", "wallet", "renew", WithPeers(peers...), WithTTL(ttl))
-				_, cancel, err := m.Lock(context.TODO())
-				defer cancel()
+				err := m.Lock(context.TODO())
+
 				r.NoError(err)
 				r.Equal(ttl, m.lease.TTL.Duration())
 				r.Equal("wallet", m.lease.Topic)
@@ -154,13 +205,13 @@ func TestRenew(t *testing.T) {
 			name: "renew_should_not_work_when_lease_is_expired",
 			run: func(r *require.Assertions) {
 				ttl := 2 * time.Second
-				m := New("renew", "wallet", "renew", WithPeers(peers...), WithTTL(ttl))
-				_, cancel, err := m.Lock(context.TODO())
-				defer cancel()
+				m := New("renew", "wallet", "renew_expires", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
 				r.NoError(err)
 				r.Equal(ttl, m.lease.TTL.Duration())
 				r.Equal("wallet", m.lease.Topic)
-				r.Equal("renew", m.lease.Key)
+				r.Equal("renew_expires", m.lease.Key)
 
 				time.Sleep(ttl)
 
@@ -170,12 +221,38 @@ func TestRenew(t *testing.T) {
 			},
 		},
 		{
+			name: "keepalive_should_work",
+			run: func(r *require.Assertions) {
+				ttl := 2 * time.Second
+				m := New("renew", "wallet", "renew_keepalive", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("renew", m.lease.Lessee)
+				r.Equal("wallet", m.lease.Topic)
+				r.Equal("renew_keepalive", m.lease.Key)
+
+				go m.Keepalive()
+
+				time.Sleep(ttl)
+
+				err = m.Renew(context.TODO())
+				r.NoError(err)
+
+				time.Sleep(1 * time.Second)
+				err = m.Renew(context.TODO())
+				r.NoError(err)
+
+			},
+		},
+		{
 			name: "renew_should_work_when_minority_nodes_are_down",
 			run: func(r *require.Assertions) {
 				m := New("renew", "wallet", "renew_minority", WithPeers(peers...), WithTTL(10*time.Second))
 
-				_, cancel, err := m.Lock(context.TODO())
-				defer cancel()
+				err := m.Lock(context.TODO())
+
 				r.NoError(err)
 				r.Equal(10*time.Second, m.lease.TTL.Duration())
 				r.Equal("wallet", m.lease.Topic)
@@ -193,8 +270,8 @@ func TestRenew(t *testing.T) {
 			run: func(r *require.Assertions) {
 				m := New("renew", "wallet", "renew_majority", WithPeers(peers...), WithTTL(10*time.Second))
 
-				_, cancel, err := m.Lock(context.TODO())
-				defer cancel()
+				err := m.Lock(context.TODO())
+
 				r.NoError(err)
 				r.Equal(10*time.Second, m.lease.TTL.Duration())
 				r.Equal("wallet", m.lease.Topic)
