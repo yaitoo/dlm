@@ -96,6 +96,9 @@ func (n *Node) ReleaseLock(req LockRequest, ok *bool) error {
 
 	lease, err := n.getLease(req.Topic, req.Key)
 	if err != nil {
+		if errors.Is(err, ErrNoLease) {
+			return nil
+		}
 		return err
 	}
 

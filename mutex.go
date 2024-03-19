@@ -164,7 +164,7 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	a := async.New[bool]()
+	a := async.NewA()
 	req := m.createRequest()
 
 	cluster, err := m.connect(ctx)
@@ -173,20 +173,20 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 	}
 
 	for _, c := range cluster {
-		a.Add(func(c *rpc.Client) func(ctx context.Context) (bool, error) {
-			return func(ctx context.Context) (bool, error) {
+		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
+			return func(ctx context.Context) error {
 				var t bool
 				err := c.Call("dlm.ReleaseLock", req, &t)
 				if err != nil {
-					return t, err
+					return err
 				}
 
-				return t, nil
+				return nil
 			}
 		}(c))
 	}
 
-	_, errs, err := a.WaitN(ctx, m.consensus)
+	errs, err := a.WaitN(ctx, m.consensus)
 	if err != nil {
 		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
 		return m.Error(errs, err)
@@ -196,6 +196,75 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 
 	return nil
 }
+
+func (m *Mutex) Freeze(ctx context.Context, topic string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	a := async.NewA()
+
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
+
+	cluster, err := m.connect(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range cluster {
+		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
+			return func(ctx context.Context) error {
+				var ok bool
+				return c.Call("dlm.Freeze", topic, &ok)
+			}
+		}(c))
+	}
+
+	errs, err := a.WaitN(ctx, m.consensus)
+
+	if err != nil {
+		Logger.Warn("dlm: freeze topic", slog.Any("err", errs))
+		return m.Error(errs, err)
+	}
+
+	return nil
+
+}
+
+func (m *Mutex) Reset(ctx context.Context, topic string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	a := async.NewA()
+
+	ctx, cancel := context.WithTimeout(ctx, m.timeout)
+	defer cancel()
+
+	cluster, err := m.connect(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range cluster {
+		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
+			return func(ctx context.Context) error {
+				var ok bool
+				return c.Call("dlm.Reset", topic, &ok)
+			}
+		}(c))
+	}
+
+	errs, err := a.WaitN(ctx, m.consensus)
+
+	if err != nil {
+		Logger.Warn("dlm: freeze reset", slog.Any("err", errs))
+		return m.Error(errs, err)
+	}
+
+	return nil
+
+}
+
 func (m *Mutex) createRequest() LockRequest {
 	return LockRequest{
 		ID:    m.id,

@@ -362,6 +362,17 @@ func TestUnlock(t *testing.T) {
 			},
 		},
 		{
+			name: "unlock_should_work_even_lease_does_not_exists",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("unlock", "wallet", "unlock", WithPeers(peers...), WithTTL(ttl))
+
+				err = m.Unlock(context.TODO())
+				r.NoError(err)
+
+			},
+		},
+		{
 			name: "unlock_should_not_work_when_lease_is_not_yours",
 			run: func(r *require.Assertions) {
 				ttl := 10 * time.Second
@@ -403,7 +414,7 @@ func TestUnlock(t *testing.T) {
 			},
 		},
 		{
-			name: "renew_should_not_work_when_majority_nodes_are_down",
+			name: "unlock_should_not_work_when_majority_nodes_are_down",
 			run: func(r *require.Assertions) {
 				ttl := 10 * time.Second
 				m := New("unlock", "wallet", "unlock_majority", WithPeers(peers...), WithTTL(ttl))
@@ -423,6 +434,140 @@ func TestUnlock(t *testing.T) {
 				err = m.Unlock(context.TODO())
 				r.ErrorIs(err, async.ErrTooLessDone)
 
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.run(require.New(t))
+		})
+	}
+}
+
+func TestTopic(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.TODO())
+	defer cancel()
+	peers, nodes, clean, err := createCluster(ctx, 5)
+
+	require.NoError(t, err)
+
+	defer func() {
+		for _, c := range clean {
+			c()
+		}
+	}()
+
+	tests := []struct {
+		name string
+		run  func(*require.Assertions)
+	}{
+		{
+			name: "freeze_should_work",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("freeze", "freeze", "freeze", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("freeze", m.lease.Lessee)
+				r.Equal("freeze", m.lease.Topic)
+				r.Equal("freeze", m.lease.Key)
+
+				err = m.Freeze(context.Background(), "freeze")
+				r.NoError(err)
+
+				err = m.Renew(context.TODO())
+				r.ErrorIs(err, ErrFrozenTopic)
+
+				m2 := New("freeze_2", "freeze", "freeze_2", WithPeers(peers...), WithTTL(ttl))
+				err = m2.Lock(context.TODO())
+				r.ErrorIs(err, ErrFrozenTopic)
+
+				err = m.Reset(context.Background(), "freeze")
+				r.NoError(err)
+
+				err = m.Renew(context.Background())
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("freeze", m.lease.Topic)
+				r.Equal("freeze", m.lease.Key)
+
+				err = m2.Lock(context.TODO())
+				r.NoError(err)
+				r.Equal(ttl, m2.lease.TTL.Duration())
+				r.Equal("freeze_2", m2.lease.Lessee)
+				r.Equal("freeze", m2.lease.Topic)
+				r.Equal("freeze_2", m2.lease.Key)
+			},
+		},
+		{
+			name: "freeze_should_work_when_minority_nodes_are_down",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("freeze", "freeze", "freeze", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("freeze", m.lease.Lessee)
+				r.Equal("freeze", m.lease.Topic)
+				r.Equal("freeze", m.lease.Key)
+
+				nodes[0].Stop()
+				nodes[1].Stop()
+
+				err = m.Freeze(context.Background(), "freeze")
+				r.NoError(err)
+
+				err = m.Renew(context.TODO())
+				r.ErrorIs(err, ErrFrozenTopic)
+
+				m2 := New("freeze_2", "freeze", "freeze_2", WithPeers(peers...), WithTTL(ttl))
+				err = m2.Lock(context.TODO())
+				r.ErrorIs(err, ErrFrozenTopic)
+
+				err = m.Reset(context.Background(), "freeze")
+				r.NoError(err)
+
+				err = m.Renew(context.Background())
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("freeze", m.lease.Topic)
+				r.Equal("freeze", m.lease.Key)
+
+				err = m2.Lock(context.TODO())
+				r.NoError(err)
+				r.Equal(ttl, m2.lease.TTL.Duration())
+				r.Equal("freeze_2", m2.lease.Lessee)
+				r.Equal("freeze", m2.lease.Topic)
+				r.Equal("freeze_2", m2.lease.Key)
+			},
+		},
+
+		{
+			name: "freeze_should_work_when_minority_nodes_are_down",
+			run: func(r *require.Assertions) {
+				ttl := 10 * time.Second
+				m := New("freeze", "freeze", "freeze", WithPeers(peers...), WithTTL(ttl))
+				err := m.Lock(context.TODO())
+
+				r.NoError(err)
+				r.Equal(ttl, m.lease.TTL.Duration())
+				r.Equal("freeze", m.lease.Lessee)
+				r.Equal("freeze", m.lease.Topic)
+				r.Equal("freeze", m.lease.Key)
+
+				nodes[0].Stop()
+				nodes[1].Stop()
+				nodes[2].Stop()
+
+				err = m.Freeze(context.Background(), "freeze")
+				r.ErrorIs(err, async.ErrTooLessDone)
+
+				err = m.Reset(context.Background(), "freeze")
+				r.ErrorIs(err, async.ErrTooLessDone)
 			},
 		},
 	}
