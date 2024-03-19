@@ -2,6 +2,7 @@ package dlm
 
 import (
 	"log/slog"
+	"net"
 	"net/rpc"
 	"sync"
 
@@ -14,7 +15,6 @@ func NewNode(addr string, db *sqle.DB, options ...NodeOption) *Node {
 		db:     db,
 		frozen: make(map[string]struct{}),
 		logger: slog.Default(),
-		close:  make(chan struct{}),
 	}
 
 	for _, o := range options {
@@ -25,12 +25,14 @@ func NewNode(addr string, db *sqle.DB, options ...NodeOption) *Node {
 }
 
 type Node struct {
-	mu     sync.Mutex
+	mu     sync.RWMutex
 	db     *sqle.DB
 	logger *slog.Logger
 	frozen map[string]struct{}
 
-	addr   string
-	server *rpc.Server
-	close  chan struct{}
+	stopped bool
+
+	addr     string
+	listener net.Listener
+	server   *rpc.Server
 }

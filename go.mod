@@ -4,6 +4,7 @@ go 1.18
 
 require (
 	github.com/mattn/go-sqlite3 v1.14.22
+	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.9.0
 	github.com/yaitoo/async v1.0.4
 	github.com/yaitoo/sqle v1.3.1

@@ -1,6 +1,8 @@
 package dlm
 
-import "time"
+import (
+	"time"
+)
 
 type MutexOption func(m *Mutex)
 

@@ -1,7 +1,6 @@
 package dlm
 
 import (
-	"context"
 	"database/sql"
 	"net"
 	"os"
@@ -48,16 +47,13 @@ func createSqlite3() (*sql.DB, func(), error) {
 }
 
 func TestLease(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
 	db, clean, err := createSqlite3()
 	require.NoError(t, err)
 	defer clean()
-
 	n := NewNode(getFreeAddr(), sqle.Open(db))
-	err = n.Start(ctx)
+	err = n.Start()
 	require.NoError(t, err)
+	defer n.Stop()
 
 	walletTerms := sqle.Duration(5 * time.Second)
 	userTerms := sqle.Duration(3 * time.Second)
@@ -232,17 +228,15 @@ func TestLease(t *testing.T) {
 	}
 }
 
-func TestTopic(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
+func TestNodeTopic(t *testing.T) {
 	db, clean, err := createSqlite3()
 	require.NoError(t, err)
 	defer clean()
 
 	n := NewNode(getFreeAddr(), sqle.Open(db))
-	err = n.Start(ctx)
+	err = n.Start()
 	require.NoError(t, err)
+	defer n.Stop()
 
 	terms := sqle.Duration(5 * time.Second)
 
