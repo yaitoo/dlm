@@ -57,20 +57,20 @@ func (n *Node) waitRequest() {
 	for {
 		conn, err := n.listener.Accept()
 
-		if err == nil {
+		if n.isStopped() {
+			return
+		}
 
-			if n.isStopped() {
-				return
-			}
-
-			go n.server.ServeConn(conn)
-
-		} else {
+		if err != nil {
+			// listener is closed
 			if errors.Is(err, net.ErrClosed) {
 				return
 			}
 
 			n.logger.Warn("dlm: wait request", slog.String("err", err.Error()), slog.String("addr", n.addr))
+			continue
 		}
+
+		go n.server.ServeConn(conn)
 	}
 }

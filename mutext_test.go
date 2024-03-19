@@ -53,7 +53,7 @@ func TestLock(t *testing.T) {
 		{
 			name: "lock_should_work",
 			run: func(r *require.Assertions) {
-				m := New("lock_should_work", "wallet", "lock_should_work", WithPeers(peers...), WithTTL(10*time.Second))
+				m := New("lock_should_work", "wallet", "lock_should_work", WithPeers(peers...), WithTTL(10*time.Second), WithTimeout(5*time.Second))
 				err := m.Lock(context.TODO())
 				r.NoError(err)
 				r.Equal(10*time.Second, m.lease.TTL.Duration())
