@@ -2,6 +2,7 @@ package dlm
 
 import (
 	"database/sql"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -50,7 +51,7 @@ func TestLease(t *testing.T) {
 	db, clean, err := createSqlite3()
 	require.NoError(t, err)
 	defer clean()
-	n := NewNode(getFreeAddr(), sqle.Open(db))
+	n := NewNode(getFreeAddr(), sqle.Open(db), WithLogger(slog.Default()))
 	err = n.Start()
 	require.NoError(t, err)
 	defer n.Stop()
