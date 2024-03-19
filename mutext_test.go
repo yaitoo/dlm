@@ -10,41 +10,41 @@ import (
 	"github.com/yaitoo/sqle"
 )
 
-func createCluster(ctx context.Context, num int) ([]string, []*Node, []func(), error) {
+func createCluster(num int) ([]string, []*Node, func(), error) {
 	var peers []string
 	var nodes []*Node
 	var clean []func()
 
-	for i := 0; i < num; i++ {
-		db, fn, err := createSqlite3()
-		if err != nil {
-			return nil, nil, clean, err
-		}
-		clean = append(clean, fn)
-		n := NewNode(getFreeAddr(), sqle.Open(db))
-		err = n.Start(ctx)
-		if err != nil {
-			return nil, nil, clean, err
-		}
-		peers = append(peers, n.addr)
-		nodes = append(nodes, n)
-	}
-
-	return peers, nodes, clean, nil
-}
-
-func TestLock(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
-	peers, nodes, clean, err := createCluster(ctx, 5)
-
-	require.NoError(t, err)
-
-	defer func() {
+	release := func() {
 		for _, c := range clean {
 			c()
 		}
-	}()
+	}
+
+	for i := 0; i < num; i++ {
+		db, fn, err := createSqlite3()
+		if err != nil {
+			return nil, nil, release, err
+		}
+		clean = append(clean, fn)
+		n := NewNode(getFreeAddr(), sqle.Open(db))
+		err = n.Start()
+		if err != nil {
+			return nil, nil, release, err
+		}
+		peers = append(peers, n.addr)
+		nodes = append(nodes, n)
+
+		clean = append(clean, n.Stop)
+	}
+
+	return peers, nodes, release, nil
+}
+
+func TestLock(t *testing.T) {
+	peers, nodes, clean, err := createCluster(5)
+	require.NoError(t, err)
+	defer clean()
 
 	tests := []struct {
 		name string
@@ -130,7 +130,9 @@ func TestLock(t *testing.T) {
 				m := New("lock_should_work", "wallet", "minority_nodes_are_down", WithPeers(peers...), WithTTL(10*time.Second))
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 
 				err := m.Lock(context.TODO())
 
@@ -151,8 +153,11 @@ func TestLock(t *testing.T) {
 				m := New("lock_should_work", "wallet", "majority_nodes_are_down", WithPeers(peers...), WithTTL(10*time.Second))
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 				nodes[2].Stop()
+				defer nodes[2].Start() // nolint: errcheck
 
 				err = m.Lock(context.TODO())
 				r.Error(err, async.ErrTooLessDone)
@@ -168,17 +173,9 @@ func TestLock(t *testing.T) {
 }
 
 func TestRenew(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
-	peers, nodes, clean, err := createCluster(ctx, 5)
-
+	peers, nodes, clean, err := createCluster(5)
 	require.NoError(t, err)
-
-	defer func() {
-		for _, c := range clean {
-			c()
-		}
-	}()
+	defer clean()
 
 	tests := []struct {
 		name string
@@ -290,7 +287,9 @@ func TestRenew(t *testing.T) {
 				r.Equal("renew_minority", m.lease.Key)
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 				err = m.Renew(context.TODO())
 				r.NoError(err)
 
@@ -309,8 +308,12 @@ func TestRenew(t *testing.T) {
 				r.Equal("renew_majority", m.lease.Key)
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 				nodes[2].Stop()
+				defer nodes[2].Start() // nolint: errcheck
+
 				err = m.Renew(context.TODO())
 				r.ErrorIs(err, async.ErrTooLessDone)
 
@@ -326,17 +329,9 @@ func TestRenew(t *testing.T) {
 }
 
 func TestUnlock(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
-	peers, nodes, clean, err := createCluster(ctx, 5)
-
+	peers, nodes, clean, err := createCluster(5)
 	require.NoError(t, err)
-
-	defer func() {
-		for _, c := range clean {
-			c()
-		}
-	}()
+	defer clean()
 
 	tests := []struct {
 		name string
@@ -407,7 +402,11 @@ func TestUnlock(t *testing.T) {
 				r.Equal("unlock_minority", m.lease.Key)
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
+
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
+
 				err = m.Unlock(context.TODO())
 				r.NoError(err)
 
@@ -428,8 +427,11 @@ func TestUnlock(t *testing.T) {
 				r.Equal("unlock_majority", m.lease.Key)
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 				nodes[2].Stop()
+				defer nodes[2].Start() // nolint: errcheck
 
 				err = m.Unlock(context.TODO())
 				r.ErrorIs(err, async.ErrTooLessDone)
@@ -446,17 +448,9 @@ func TestUnlock(t *testing.T) {
 }
 
 func TestTopic(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.TODO())
-	defer cancel()
-	peers, nodes, clean, err := createCluster(ctx, 5)
-
+	peers, nodes, clean, err := createCluster(5)
 	require.NoError(t, err)
-
-	defer func() {
-		for _, c := range clean {
-			c()
-		}
-	}()
+	defer clean()
 
 	tests := []struct {
 		name string
@@ -516,7 +510,9 @@ func TestTopic(t *testing.T) {
 				r.Equal("freeze", m.lease.Key)
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 
 				err = m.Freeze(context.Background(), "freeze")
 				r.NoError(err)
@@ -560,8 +556,11 @@ func TestTopic(t *testing.T) {
 				r.Equal("freeze", m.lease.Key)
 
 				nodes[0].Stop()
+				defer nodes[0].Start() // nolint: errcheck
 				nodes[1].Stop()
+				defer nodes[1].Start() // nolint: errcheck
 				nodes[2].Stop()
+				defer nodes[2].Start() // nolint: errcheck
 
 				err = m.Freeze(context.Background(), "freeze")
 				r.ErrorIs(err, async.ErrTooLessDone)

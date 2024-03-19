@@ -9,42 +9,62 @@ import (
 )
 
 // Start start the node and its RPC service
-func (n *Node) Start(ctx context.Context) error {
+func (n *Node) Start() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
 	l, err := net.Listen("tcp", n.addr)
 	if err != nil {
 		return err
 	}
 
-	_, err = n.db.ExecContext(ctx, CreateTableLease)
+	_, err = n.db.ExecContext(context.Background(), CreateTableLease)
 	if err != nil {
 		return err
 	}
 
-	_, err = n.db.ExecContext(ctx, CreateTableTopic)
+	_, err = n.db.ExecContext(context.Background(), CreateTableTopic)
 	if err != nil {
 		return err
 	}
 
 	n.server = rpc.NewServer()
-	go n.waitClose(ctx, l)
-	go n.waitRequest(l)
-
+	n.listener = l
+	go n.waitRequest()
+	n.stopped = false
+	n.logger.Info("dlm: node is running")
 	return n.server.RegisterName("dlm", n)
 }
 
 // Stop stop the node and its RPC service
 func (n *Node) Stop() {
-	go func() {
-		n.close <- struct{}{}
-	}()
-	n.logger.Info("dlm: node stopped")
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.listener.Close()
+	n.stopped = true
+	n.logger.Info("dlm: node is stopped")
 }
 
-func (n *Node) waitRequest(l net.Listener) {
+func (n *Node) isStopped() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+
+	return n.stopped
+}
+
+func (n *Node) waitRequest() {
+
 	for {
-		conn, err := l.Accept()
+		conn, err := n.listener.Accept()
+
 		if err == nil {
+
+			if n.isStopped() {
+				return
+			}
+
 			go n.server.ServeConn(conn)
+
 		} else {
 			if errors.Is(err, net.ErrClosed) {
 				return
@@ -52,16 +72,5 @@ func (n *Node) waitRequest(l net.Listener) {
 
 			n.logger.Warn("dlm: wait request", slog.String("err", err.Error()), slog.String("addr", n.addr))
 		}
-
 	}
-}
-
-func (n *Node) waitClose(ctx context.Context, l net.Listener) {
-
-	select {
-	case <-n.close:
-	case <-ctx.Done():
-	}
-
-	l.Close()
 }
