@@ -150,6 +150,8 @@ func TestLock(t *testing.T) {
 			run: func(r *require.Assertions) {
 				m := New("lock_should_work", "wallet", "majority_nodes_are_down", WithPeers(peers...), WithTTL(10*time.Second))
 
+				nodes[0].Stop()
+				nodes[1].Stop()
 				nodes[2].Stop()
 
 				err = m.Lock(context.TODO())
