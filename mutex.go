@@ -3,6 +3,7 @@ package dlm
 import (
 	"context"
 	"errors"
+	"math"
 	"net/rpc"
 	"strings"
 	"sync"
@@ -12,25 +13,21 @@ import (
 )
 
 func New(id, topic, key string, options ...MutexOption) *Mutex {
-	// id := os.Getenv("DLM-MUTEX-ID")
 
-	// if id == "" {
-	// 	id, _ = uuid.GenerateUUID()
-	// 	if id == "" {
-	// 		id = fmt.Sprintf("%v-%v", os.Getegid(), time.Now().UnixNano())
-	// 	}
-	// }
 	m := &Mutex{
 		id:      id,
 		topic:   strings.ToLower(topic),
 		key:     strings.ToLower(key),
 		done:    make(chan struct{}),
 		timeout: DefaultTimeout,
+		ttl:     DefaultLeaseTerm,
 	}
 
 	for _, o := range options {
 		o(m)
 	}
+
+	m.consensus = int(math.Ceil(float64(len(m.peers)) / 2))
 
 	return m
 }
@@ -38,14 +35,16 @@ func New(id, topic, key string, options ...MutexOption) *Mutex {
 type Mutex struct {
 	mu sync.RWMutex
 
-	id          string
-	topic       string
-	key         string
-	dispatchers []string
-	timeout     time.Duration
+	id      string
+	topic   string
+	key     string
+	peers   []string
+	timeout time.Duration
+	ttl     time.Duration
 
-	cluster []*rpc.Client
-	done    chan struct{}
+	consensus int
+	cluster   []*rpc.Client
+	done      chan struct{}
 
 	lease Lease
 }
@@ -53,7 +52,7 @@ type Mutex struct {
 func (m *Mutex) connect(ctx context.Context) error {
 	if m.cluster == nil {
 		a := async.New[*rpc.Client]()
-		for _, d := range m.dispatchers {
+		for _, d := range m.peers {
 			a.Add(func(addr string) func(context.Context) (*rpc.Client, error) {
 				return func(ctx context.Context) (*rpc.Client, error) {
 					return connect(ctx, addr, m.timeout)
@@ -62,7 +61,7 @@ func (m *Mutex) connect(ctx context.Context) error {
 		}
 
 		cluster, _, err := a.Wait(ctx)
-		if len(cluster) > 0 {
+		if len(cluster) >= m.consensus {
 			m.cluster = cluster
 			return nil
 		}
@@ -73,7 +72,7 @@ func (m *Mutex) connect(ctx context.Context) error {
 	return nil
 }
 
-func (m *Mutex) Lock(ctx context.Context) (context.Context, error) {
+func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -85,7 +84,7 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, error) {
 
 	err := m.connect(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	for _, c := range m.cluster {
@@ -99,25 +98,28 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, error) {
 	}
 
 	start := time.Now()
-	t, _, err := a.WaitAny(ctx)
-	if err != nil {
-		return nil, err
-	}
-	now := time.Now()
-	t.ExpiresOn = now.Add(t.TTL - time.Until(start))
+	result, _, err := a.WaitN(ctx, m.consensus)
 
-	if !now.After(t.ExpiresOn) {
-		return nil, ErrExpiredLease
+	if err != nil {
+		return nil, nil, err
+	}
+
+	t := result[0]
+	now := time.Now()
+	t.ExpiresOn = now.Add(t.TTL.Duration() - time.Until(start))
+
+	if !now.Before(t.ExpiresOn) {
+		return nil, nil, ErrExpiredLease
 	}
 
 	m.lease = t
 
-	wCtx, wCancel := context.WithCancel(context.Background())
+	statusCtx, statusCancel := context.WithCancel(context.Background())
 
-	go m.keepalive(wCtx, wCancel)
-	go m.waitExpires(wCtx, wCancel)
+	go m.keepalive(statusCtx, statusCancel)
+	go m.waitExpires(statusCtx, statusCancel)
 
-	return ctx, nil
+	return statusCtx, statusCancel, nil
 
 }
 
@@ -142,7 +144,7 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 	}
 	m.done <- struct{}{}
 
-	_, _, err := a.WaitAny(ctx)
+	_, _, err := a.WaitN(ctx, m.consensus)
 	if err != nil {
 		return err
 	}
@@ -154,6 +156,7 @@ func (m *Mutex) createRequest() LockRequest {
 		ID:    m.id,
 		Topic: m.topic,
 		Key:   m.key,
+		TTL:   m.ttl,
 	}
 }
 
@@ -179,20 +182,17 @@ func (m *Mutex) Renew(ctx context.Context) error {
 	defer cancel()
 
 	start := time.Now()
-	t, _, err := a.WaitAny(ctx)
+	result, _, err := a.WaitN(ctx, m.consensus)
 	if err != nil {
 		return err
 	}
 
 	now := time.Now()
-	t.ExpiresOn = now.Add(t.TTL - time.Until(start))
+	t := result[0]
+	t.ExpiresOn = now.Add(t.TTL.Duration() - time.Until(start))
 
 	if !now.After(t.ExpiresOn) {
 		return ErrExpiredLease
-	}
-
-	if t.Nonce != m.lease.Nonce {
-		return ErrStaleNonce
 	}
 
 	m.lease = t
@@ -207,10 +207,15 @@ func (m *Mutex) waitExpires(ctx context.Context, cancel context.CancelFunc) {
 		expiresOn = m.lease.ExpiresOn
 		m.mu.RUnlock()
 
-		<-time.After(time.Until(expiresOn))
-
-		if !expiresOn.Before(expiresOn) {
+		select {
+		case <-m.done:
 			return
+		case <-ctx.Done():
+			return
+		case <-time.After(time.Until(expiresOn)):
+			if !expiresOn.Before(expiresOn) {
+				return
+			}
 		}
 	}
 }
@@ -228,6 +233,8 @@ func (m *Mutex) keepalive(ctx context.Context, cancel context.CancelFunc) {
 		select {
 		case <-m.done:
 			return
+		case <-ctx.Done():
+			return
 		case <-time.After(1 * time.Second):
 			// lease already expires
 			if !expiresOn.Before(expiresOn) {
@@ -235,7 +242,7 @@ func (m *Mutex) keepalive(ctx context.Context, cancel context.CancelFunc) {
 			}
 
 			err = m.Renew(context.Background())
-			if errors.Is(err, ErrStaleNonce) || errors.Is(err, ErrExpiredLease) {
+			if errors.Is(err, ErrExpiredLease) {
 				return
 			}
 		}

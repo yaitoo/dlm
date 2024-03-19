@@ -7,26 +7,34 @@ import (
 )
 
 var (
-	ErrExpiredLease      = errors.New("dlm: lease expires")
-	ErrNoLease           = errors.New("dlm: no lease")
-	ErrNotYourLease      = errors.New("dlm: not your lease")
-	ErrStaleNonce        = errors.New("dlm: stale nonce")
-	ErrInvalidTopic      = errors.New("dlm: topic can't starts with @")
-	ErrNotRaftLeader     = errors.New("dlm: not raft leader")
-	ErrAlreadyLocked     = errors.New("dlm: already locked by others")
-	ErrNoConsensus       = errors.New("dlm: no consensus")
-	ErrClusterNotStarted = errors.New("dlm: cluster is not started")
-	ErrFrozenTopic       = errors.New("dlm: topic is frozen")
+	ErrExpiredLease = errors.New("dlm: lease expires")
+	ErrNoLease      = errors.New("dlm: no lease")
+	ErrNotYourLease = errors.New("dlm: not your lease")
+	ErrLeaseExists  = errors.New("dlm: lease exists")
+
+	ErrFrozenTopic = errors.New("dlm: topic is frozen")
+
+	ErrBadDatabase = errors.New("dlm: bad database operation")
 )
 
 var (
-	DefaultRaftTimeout         = 3 * time.Second
-	DefaultTimeout             = 3 * time.Second
-	DefaultLeaseTerm           = 5 * time.Second
-	DefaultRetainSnapshotCount = 2
-	Logger                     = slog.Default()
+	DefaultTimeout   = 3 * time.Second
+	DefaultLeaseTerm = 5 * time.Second
+
+	Logger = slog.Default()
 )
 
 const (
-	TopicTerms = "@terms:"
+	CreateTableLease = "CREATE TABLE IF NOT EXISTS dlm_lease(" +
+		"`topic` varchar(20) NOT NULL," +
+		"`key` varchar(50) NOT NULL," +
+		"`lessee` varchar(36) NOT NULL," +
+		"`since` int NOT NULL DEFAULT '0'," +
+		"`ttl` int NOT NULL DEFAULT '0'," +
+		"PRIMARY KEY (topic, key));"
+
+	CreateTableTopic = "CREATE TABLE IF NOT EXISTS dlm_topic(" +
+		"`topic` varchar(20) NOT NULL," +
+		"`ttl` int NOT NULL DEFAULT '0'," +
+		"PRIMARY KEY (topic));"
 )

@@ -4,9 +4,15 @@ import "time"
 
 type MutexOption func(m *Mutex)
 
-func WithDispatcher(dispatchers ...string) MutexOption {
+func WithPeers(peers ...string) MutexOption {
 	return func(m *Mutex) {
-		m.dispatchers = dispatchers
+		m.peers = peers
+	}
+}
+
+func WithTTL(d time.Duration) MutexOption {
+	return func(m *Mutex) {
+		m.ttl = d
 	}
 }
 
