@@ -3,6 +3,7 @@ package dlm
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
 	"net/rpc"
 	"strings"
@@ -27,7 +28,7 @@ func New(id, topic, key string, options ...MutexOption) *Mutex {
 		o(m)
 	}
 
-	m.consensus = int(math.Ceil(float64(len(m.peers)) / 2))
+	m.consensus = int(math.Floor(float64(len(m.peers))/2)) + 1
 
 	return m
 }
@@ -43,33 +44,29 @@ type Mutex struct {
 	ttl     time.Duration
 
 	consensus int
-	cluster   []*rpc.Client
 	done      chan struct{}
 
 	lease Lease
 }
 
-func (m *Mutex) connect(ctx context.Context) error {
-	if m.cluster == nil {
-		a := async.New[*rpc.Client]()
-		for _, d := range m.peers {
-			a.Add(func(addr string) func(context.Context) (*rpc.Client, error) {
-				return func(ctx context.Context) (*rpc.Client, error) {
-					return connect(ctx, addr, m.timeout)
-				}
-			}(d))
-		}
+func (m *Mutex) connect(ctx context.Context) ([]*rpc.Client, error) {
 
-		cluster, _, err := a.Wait(ctx)
-		if len(cluster) >= m.consensus {
-			m.cluster = cluster
-			return nil
-		}
-
-		return err
+	a := async.New[*rpc.Client]()
+	for _, d := range m.peers {
+		a.Add(func(addr string) func(context.Context) (*rpc.Client, error) {
+			return func(ctx context.Context) (*rpc.Client, error) {
+				return connect(ctx, addr, m.timeout)
+			}
+		}(d))
 	}
 
-	return nil
+	cluster, _, err := a.Wait(ctx)
+	if len(cluster) >= m.consensus {
+		return cluster, nil
+	}
+
+	return nil, err
+
 }
 
 func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, error) {
@@ -82,12 +79,12 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, 
 	ctx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 
-	err := m.connect(ctx)
+	cluster, err := m.connect(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	for _, c := range m.cluster {
+	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) (Lease, error) {
 			return func(ctx context.Context) (Lease, error) {
 				var t Lease
@@ -98,17 +95,16 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, 
 	}
 
 	start := time.Now()
-	result, _, err := a.WaitN(ctx, m.consensus)
+	result, errs, err := a.WaitN(ctx, m.consensus)
 
 	if err != nil {
-		return nil, nil, err
+		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
+		return nil, nil, m.Error(errs, err)
 	}
 
 	t := result[0]
-	now := time.Now()
-	t.ExpiresOn = now.Add(t.TTL.Duration() - time.Until(start))
 
-	if !now.Before(t.ExpiresOn) {
+	if t.IsExpired(start) {
 		return nil, nil, ErrExpiredLease
 	}
 
@@ -123,49 +119,17 @@ func (m *Mutex) Lock(ctx context.Context) (context.Context, context.CancelFunc, 
 
 }
 
-func (m *Mutex) Unlock(ctx context.Context) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	a := async.New[bool]()
-	req := m.createRequest()
-	for _, c := range m.cluster {
-		a.Add(func(c *rpc.Client) func(ctx context.Context) (bool, error) {
-			return func(ctx context.Context) (bool, error) {
-				var t bool
-				err := c.Call("dlm.ReleaseLock", req, &t)
-				if err != nil {
-					return t, err
-				}
-
-				return t, nil
-			}
-		}(c))
-	}
-	m.done <- struct{}{}
-
-	_, _, err := a.WaitN(ctx, m.consensus)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-func (m *Mutex) createRequest() LockRequest {
-	return LockRequest{
-		ID:    m.id,
-		Topic: m.topic,
-		Key:   m.key,
-		TTL:   m.ttl,
-	}
-}
-
 func (m *Mutex) Renew(ctx context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	a := async.New[Lease]()
 	req := m.createRequest()
-	for _, c := range m.cluster {
+	cluster, err := m.connect(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) (Lease, error) {
 			return func(ctx context.Context) (Lease, error) {
 				var t Lease
@@ -182,21 +146,63 @@ func (m *Mutex) Renew(ctx context.Context) error {
 	defer cancel()
 
 	start := time.Now()
-	result, _, err := a.WaitN(ctx, m.consensus)
+	result, errs, err := a.WaitN(ctx, m.consensus)
 	if err != nil {
-		return err
+		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
+		return m.Error(errs, err)
 	}
 
-	now := time.Now()
 	t := result[0]
-	t.ExpiresOn = now.Add(t.TTL.Duration() - time.Until(start))
-
-	if !now.After(t.ExpiresOn) {
+	if t.IsExpired(start) {
 		return ErrExpiredLease
 	}
 
 	m.lease = t
 	return nil
+}
+
+func (m *Mutex) Unlock(ctx context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	a := async.New[bool]()
+	req := m.createRequest()
+
+	cluster, err := m.connect(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range cluster {
+		a.Add(func(c *rpc.Client) func(ctx context.Context) (bool, error) {
+			return func(ctx context.Context) (bool, error) {
+				var t bool
+				err := c.Call("dlm.ReleaseLock", req, &t)
+				if err != nil {
+					return t, err
+				}
+
+				return t, nil
+			}
+		}(c))
+	}
+	m.done <- struct{}{}
+
+	_, errs, err := a.WaitN(ctx, m.consensus)
+	if err != nil {
+		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
+		return m.Error(errs, err)
+	}
+
+	return nil
+}
+func (m *Mutex) createRequest() LockRequest {
+	return LockRequest{
+		ID:    m.id,
+		Topic: m.topic,
+		Key:   m.key,
+		TTL:   m.ttl,
+	}
 }
 
 func (m *Mutex) waitExpires(ctx context.Context, cancel context.CancelFunc) {
@@ -247,4 +253,56 @@ func (m *Mutex) keepalive(ctx context.Context, cancel context.CancelFunc) {
 			}
 		}
 	}
+}
+
+// Error try unwrap consensus known error
+func (m *Mutex) Error(errs []error, err error) error {
+	consensus := make(map[rpc.ServerError]int)
+
+	for _, err := range errs {
+		s, ok := err.(rpc.ServerError)
+		if ok {
+			c, ok := consensus[s]
+			if !ok {
+				consensus[s] = 1
+			} else {
+				consensus[s] = c + 1
+			}
+		}
+	}
+
+	max := 0
+	var msg string
+
+	for k, v := range consensus {
+		if v > max {
+			max = v
+			msg = string(k)
+		}
+	}
+
+	if max < m.consensus {
+		return err
+	}
+
+	if !strings.HasPrefix(msg, "dlm:") {
+		return err
+	}
+
+	switch msg {
+	case ErrExpiredLease.Error():
+		return ErrExpiredLease
+	case ErrNoLease.Error():
+		return ErrNoLease
+	case ErrNotYourLease.Error():
+		return ErrNotYourLease
+	case ErrLeaseExists.Error():
+		return ErrLeaseExists
+	case ErrFrozenTopic.Error():
+		return ErrFrozenTopic
+	case ErrBadDatabase.Error():
+		return ErrBadDatabase
+	}
+
+	return err
 }

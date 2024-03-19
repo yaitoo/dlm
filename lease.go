@@ -19,6 +19,13 @@ type Lease struct {
 	ExpiresOn time.Time `json:"-"`
 }
 
+// IsLive check if lease is live on node side
 func (l *Lease) IsLive() bool {
 	return time.Now().Before(time.Unix(l.Since, 0).Add(l.TTL.Duration()))
+}
+
+func (l *Lease) IsExpired(start time.Time) bool {
+	now := time.Now()
+	l.ExpiresOn = now.Add(l.TTL.Duration() - time.Until(start))
+	return !now.Before(l.ExpiresOn)
 }

@@ -34,7 +34,9 @@ func (n *Node) Start(ctx context.Context) error {
 
 // Stop stop the node and its RPC service
 func (n *Node) Stop() {
-	n.close <- struct{}{}
+	go func() {
+		n.close <- struct{}{}
+	}()
 	n.logger.Info("dlm: node stopped")
 }
 
