@@ -52,6 +52,8 @@ func (n *Node) NewLock(req LockRequest, t *Lease) error {
 		*t = lease
 	}
 
+	log.Printf("new: topic=%s key=%s lessee=%s ttl=%v\n", lease.Topic, lease.Key, lease.Lessee, lease.TTL)
+
 	return nil
 }
 
@@ -127,7 +129,7 @@ func (n *Node) Freeze(topic string, ok *bool) error {
 	n.frozen[topic] = struct{}{}
 	*ok = true
 
-	log.Printf("Freeze: topic=%s", topic)
+	log.Printf("freeze: topic=%s", topic)
 
 	return nil
 }
