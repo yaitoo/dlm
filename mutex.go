@@ -100,7 +100,7 @@ func (m *Mutex) Lock(ctx context.Context) error {
 	result, errs, err := a.WaitN(ctx, m.consensus)
 
 	if err != nil {
-		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
+		Logger.Warn("dlm: new lock", slog.Any("err", errs))
 		return m.Error(errs, err)
 	}
 
@@ -188,7 +188,7 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 
 	errs, err := a.WaitN(ctx, m.consensus)
 	if err != nil {
-		Logger.Warn("dlm: renew lock", slog.Any("err", errs))
+		Logger.Warn("dlm: release lock", slog.Any("err", errs))
 		return m.Error(errs, err)
 	}
 
