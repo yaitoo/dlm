@@ -89,7 +89,6 @@ func (n *Node) RenewLock(req LockRequest, t *Lease) error {
 		*t = lease
 	}
 
-	log.Printf("renew: topic=%s key=%s lessee=%s ttl=%v\n", lease.Topic, lease.Key, lease.Lessee, lease.TTL)
 	return nil
 }
 
