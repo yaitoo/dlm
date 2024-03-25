@@ -2,6 +2,7 @@ package dlm
 
 import (
 	"errors"
+	"log"
 	"time"
 
 	"github.com/yaitoo/sqle"
@@ -51,6 +52,7 @@ func (n *Node) NewLock(req LockRequest, t *Lease) error {
 		*t = lease
 	}
 
+	log.Printf("renew: topic=%s key=%s lessee=%s ttl=%v\n", lease.Topic, lease.Key, lease.Lessee, lease.TTL)
 	return nil
 }
 
@@ -87,6 +89,8 @@ func (n *Node) RenewLock(req LockRequest, t *Lease) error {
 	if t != nil {
 		*t = lease
 	}
+
+	log.Printf("renew: topic=%s key=%s lessee=%s ttl=%v\n", lease.Topic, lease.Key, lease.Lessee, lease.TTL)
 	return nil
 }
 
@@ -113,6 +117,8 @@ func (n *Node) ReleaseLock(req LockRequest, ok *bool) error {
 	}
 
 	*ok = true
+
+	log.Printf("release: topic=%s key=%s lessee=%s ttl=%v\n", lease.Topic, lease.Key, lease.Lessee, lease.TTL)
 
 	return nil
 }
