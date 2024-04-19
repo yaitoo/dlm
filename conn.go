@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"net/rpc"
+	"sync"
 	"time"
 )
 
@@ -26,24 +27,24 @@ func connect(ctx context.Context, addr string, timeout time.Duration) (*rpc.Clie
 type Conn struct {
 	ctx context.Context
 	net.Conn
+	once sync.Once
 }
 
-func (c *Conn) wait() {
+func (c *Conn) waitContext() {
 	// disabled deadline
-	c.Conn.SetReadDeadline(time.Time{}) // nolint: errcheck
+	c.Conn.SetDeadline(time.Time{}) // nolint: errcheck
 	<-c.ctx.Done()
 	err := c.ctx.Err()
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		c.Conn.SetReadDeadline(time.Unix(1, 0)) // nolint: errcheck
+		c.Conn.SetDeadline(time.Unix(1, 0)) // nolint: errcheck
 	}
 }
 
 func (c *Conn) Read(p []byte) (n int, err error) {
-	go c.wait()
+	go c.once.Do(c.waitContext)
 	return c.Conn.Read(p)
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
-	go c.wait()
 	return c.Conn.Write(p)
 }
