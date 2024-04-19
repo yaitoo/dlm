@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/rpc"
-	"sync"
 	"time"
 )
 
@@ -20,14 +19,22 @@ func connect(ctx context.Context, addr string, timeout time.Duration) (*rpc.Clie
 		return nil, err
 	}
 
-	return rpc.NewClient(&Conn{ctx: ctx, Conn: c}), nil
+	conn := &Conn{
+		Conn: c,
+	}
+
+	conn.ctx, conn.cancel = context.WithCancel(ctx)
+
+	go conn.waitContext()
+
+	return rpc.NewClient(conn), nil
 }
 
 // Conn wrap net.Conn with context support
 type Conn struct {
-	ctx context.Context
+	ctx    context.Context
+	cancel context.CancelFunc
 	net.Conn
-	once sync.Once
 }
 
 func (c *Conn) waitContext() {
@@ -41,10 +48,14 @@ func (c *Conn) waitContext() {
 }
 
 func (c *Conn) Read(p []byte) (n int, err error) {
-	go c.once.Do(c.waitContext)
 	return c.Conn.Read(p)
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
 	return c.Conn.Write(p)
+}
+
+func (c *Conn) Close() error {
+	defer c.cancel()
+	return c.Conn.Close()
 }
