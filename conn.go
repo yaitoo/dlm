@@ -5,11 +5,11 @@ import (
 	"errors"
 	"net"
 	"net/rpc"
+	"sync"
 	"time"
 )
 
 func connect(ctx context.Context, addr string, timeout time.Duration) (*rpc.Client, error) {
-
 	var d = net.Dialer{
 		Timeout: timeout,
 	}
