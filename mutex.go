@@ -88,6 +88,7 @@ func (m *Mutex) Lock(ctx context.Context) error {
 
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) (Lease, error) {
+			defer c.Close()
 			return func(ctx context.Context) (Lease, error) {
 				var t Lease
 				err := c.Call("dlm.NewLock", req, &t)
@@ -130,6 +131,7 @@ func (m *Mutex) Renew(ctx context.Context) error {
 
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) (Lease, error) {
+			defer c.Close()
 			return func(ctx context.Context) (Lease, error) {
 				var t Lease
 				err := c.Call("dlm.RenewLock", req, &t)
@@ -174,6 +176,7 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
+			defer c.Close()
 			return func(ctx context.Context) error {
 				var t bool
 				err := c.Call("dlm.ReleaseLock", req, &t)
@@ -213,6 +216,7 @@ func (m *Mutex) Freeze(ctx context.Context, topic string) error {
 
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
+			defer c.Close()
 			return func(ctx context.Context) error {
 				var ok bool
 				return c.Call("dlm.Freeze", topic, &ok)
@@ -247,6 +251,7 @@ func (m *Mutex) Reset(ctx context.Context, topic string) error {
 
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
+			defer c.Close()
 			return func(ctx context.Context) error {
 				var ok bool
 				return c.Call("dlm.Reset", topic, &ok)
