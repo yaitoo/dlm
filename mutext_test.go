@@ -223,7 +223,7 @@ func TestRenew(t *testing.T) {
 			name: "keepalive_should_work",
 			run: func(r *require.Assertions) {
 				ttl := 2 * time.Second
-				m := New("renew", "wallet", "renew_keepalive", WithPeers(peers...), WithTTL(ttl))
+				m := New("renew", "wallet", "renew_keepalive", WithPeers(peers...), WithTTL(ttl), WithKeepAlive(1*time.Second))
 				err := m.Lock(context.TODO())
 
 				r.NoError(err)
