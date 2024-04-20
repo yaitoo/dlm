@@ -23,3 +23,9 @@ func WithTimeout(d time.Duration) MutexOption {
 		m.timeout = d
 	}
 }
+
+func WithKeepAlive(d time.Duration) MutexOption {
+	return func(m *Mutex) {
+		m.keepalive = d
+	}
+}

@@ -16,11 +16,12 @@ import (
 func New(id, topic, key string, options ...MutexOption) *Mutex {
 
 	m := &Mutex{
-		id:      id,
-		topic:   strings.ToLower(topic),
-		key:     strings.ToLower(key),
-		timeout: DefaultTimeout,
-		ttl:     DefaultLeaseTerm,
+		id:        id,
+		topic:     strings.ToLower(topic),
+		key:       strings.ToLower(key),
+		timeout:   DefaultTimeout,
+		ttl:       DefaultLeaseTerm,
+		keepalive: DefaultKeepAlive,
 	}
 
 	for _, o := range options {
@@ -36,12 +37,13 @@ func New(id, topic, key string, options ...MutexOption) *Mutex {
 type Mutex struct {
 	mu sync.RWMutex
 
-	id      string
-	topic   string
-	key     string
-	peers   []string
-	timeout time.Duration
-	ttl     time.Duration
+	id        string
+	topic     string
+	key       string
+	peers     []string
+	timeout   time.Duration
+	ttl       time.Duration
+	keepalive time.Duration
 
 	consensus int
 
@@ -89,6 +91,7 @@ func (m *Mutex) Lock(ctx context.Context) error {
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) (Lease, error) {
 			return func(ctx context.Context) (Lease, error) {
+				defer c.Close()
 				var t Lease
 				err := c.Call("dlm.NewLock", req, &t)
 				return t, err
@@ -104,7 +107,7 @@ func (m *Mutex) Lock(ctx context.Context) error {
 		return m.Error(errs, err)
 	}
 
-	t := result[0]
+	t := result[len(result)-1]
 
 	if t.IsExpired(start) {
 		return ErrExpiredLease
@@ -131,6 +134,7 @@ func (m *Mutex) Renew(ctx context.Context) error {
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) (Lease, error) {
 			return func(ctx context.Context) (Lease, error) {
+				defer c.Close()
 				var t Lease
 				err := c.Call("dlm.RenewLock", req, &t)
 				if err != nil {
@@ -151,7 +155,7 @@ func (m *Mutex) Renew(ctx context.Context) error {
 		return m.Error(errs, err)
 	}
 
-	t := result[0]
+	t := result[len(result)-1]
 	if t.IsExpired(start) {
 		return ErrExpiredLease
 	}
@@ -175,6 +179,7 @@ func (m *Mutex) Unlock(ctx context.Context) error {
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
 			return func(ctx context.Context) error {
+				defer c.Close()
 				var t bool
 				err := c.Call("dlm.ReleaseLock", req, &t)
 				if err != nil {
@@ -214,6 +219,7 @@ func (m *Mutex) Freeze(ctx context.Context, topic string) error {
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
 			return func(ctx context.Context) error {
+				defer c.Close()
 				var ok bool
 				return c.Call("dlm.Freeze", topic, &ok)
 			}
@@ -248,6 +254,7 @@ func (m *Mutex) Reset(ctx context.Context, topic string) error {
 	for _, c := range cluster {
 		a.Add(func(c *rpc.Client) func(ctx context.Context) error {
 			return func(ctx context.Context) error {
+				defer c.Close()
 				var ok bool
 				return c.Call("dlm.Reset", topic, &ok)
 			}
@@ -275,18 +282,24 @@ func (m *Mutex) createRequest() LockRequest {
 }
 
 func (m *Mutex) waitExpires() {
+	delay := time.NewTimer(1 * time.Second)
+	defer delay.Stop()
 
 	var expiresOn time.Time
+
 	for {
 		m.mu.RLock()
 		expiresOn = m.lease.ExpiresOn
 		m.mu.RUnlock()
 
+		delay.Stop()
+		delay.Reset(time.Until(expiresOn))
+
 		select {
 
 		case <-m.Context.Done():
 			return
-		case <-time.After(time.Until(expiresOn)):
+		case <-delay.C:
 			// get latest ExpiresOn
 			m.mu.RLock()
 			expiresOn = m.lease.ExpiresOn
@@ -301,13 +314,15 @@ func (m *Mutex) waitExpires() {
 }
 
 func (m *Mutex) Keepalive() {
+	delay := time.NewTicker(m.keepalive)
+	defer delay.Stop()
 
 	var err error
 	for {
 		select {
 		case <-m.Context.Done():
 			return
-		case <-time.After(1 * time.Second):
+		case <-delay.C:
 			m.mu.RLock()
 			expiresOn := m.lease.ExpiresOn
 			m.mu.RUnlock()

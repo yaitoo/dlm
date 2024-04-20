@@ -20,6 +20,7 @@ var (
 var (
 	DefaultTimeout   = 3 * time.Second
 	DefaultLeaseTerm = 5 * time.Second
+	DefaultKeepAlive = 1 * time.Second
 
 	Logger = slog.Default()
 )
